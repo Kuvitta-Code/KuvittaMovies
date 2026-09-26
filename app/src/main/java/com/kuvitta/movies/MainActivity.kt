@@ -3,7 +3,9 @@ package com.kuvitta.movies
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -24,9 +26,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -35,8 +42,10 @@ import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.YouTubePlayer
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.listeners.AbstractYouTubePlayerListener
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.views.YouTubePlayerView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -148,19 +157,34 @@ private fun HomeScreen(onMovie: (Movie) -> Unit) = LazyColumn(Modifier.fillMaxSi
 private fun SearchScreen(initial: String, apiKey: String, onNeedKey: () -> Unit, onPlay: (VideoResult) -> Unit) {
     var query by remember(initial) { mutableStateOf(initial) }
     var results by remember { mutableStateOf<List<VideoResult>>(emptyList()) }
+    var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    fun search() {
+    val keyboard = LocalSoftwareKeyboardController.current
+    fun search(text: String = query) {
         if (apiKey.isBlank()) { onNeedKey(); return }
-        if (query.isBlank()) return
+        val requestedQuery = text.trim()
+        if (requestedQuery.isBlank()) return
         loading = true
         error = null
+        query = ""
+        suggestions = emptyList()
+        keyboard?.hide()
         scope.launch {
-            runCatching { youtubeSearch(apiKey, query) }
+            runCatching { youtubeSearch(apiKey, requestedQuery) }
                 .onSuccess { results = it; if (it.isEmpty()) error = "No se encontraron vídeos reproducibles." }
                 .onFailure { error = it.message ?: "No se pudo conectar con YouTube." }
             loading = false
+        }
+    }
+    LaunchedEffect(query) {
+        val text = query.trim()
+        if (text.length < 2) {
+            suggestions = emptyList()
+        } else {
+            delay(350)
+            suggestions = runCatching { youtubeSuggestions(text) }.getOrDefault(emptyList())
         }
     }
     LaunchedEffect(initial, apiKey) { if (initial.isNotBlank() && apiKey.isNotBlank()) search() }
@@ -169,9 +193,41 @@ private fun SearchScreen(initial: String, apiKey: String, onNeedKey: () -> Unit,
         Text("Resultados reales y reproducción dentro de KuvittaMovies", color = Color.Gray)
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(query, { query = it }, Modifier.weight(1f), placeholder = { Text("Película, documental…") }, singleLine = true, leadingIcon = { Icon(Icons.Default.Search, null) })
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Película, documental…") },
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Default.Search, null) },
+                trailingIcon = {
+                    if (query.isNotEmpty()) IconButton(onClick = { query = "" }) {
+                        Icon(Icons.Default.Close, "Borrar texto")
+                    }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { search() })
+            )
             Spacer(Modifier.width(8.dp))
             FilledIconButton(onClick = { search() }, enabled = !loading) { Icon(Icons.Default.ArrowForward, "Buscar") }
+        }
+        if (suggestions.isNotEmpty()) {
+            Card(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1F28))
+            ) {
+                Column {
+                    suggestions.take(6).forEach { suggestion ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { search(suggestion) }.padding(horizontal = 14.dp, vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Search, null, tint = Color.Gray, modifier = Modifier.size(19.dp))
+                            Text(suggestion, Modifier.padding(start = 12.dp), color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
         }
         if (apiKey.isBlank()) Card(Modifier.fillMaxWidth().padding(top = 16.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1F28))) {
             Column(Modifier.padding(16.dp)) {
@@ -208,7 +264,10 @@ private fun VideoCard(video: VideoResult, onPlay: () -> Unit) {
 private fun PlayerScreen(video: VideoResult, favorite: Boolean, onBack: () -> Unit, onFavorite: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val playerView = remember { YouTubePlayerView(context) }
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val playerView = remember(video.id) { YouTubePlayerView(context) }
+    BackHandler(onBack = onBack)
     DisposableEffect(playerView) {
         lifecycleOwner.lifecycle.addObserver(playerView)
         onDispose {
@@ -217,11 +276,13 @@ private fun PlayerScreen(video: VideoResult, favorite: Boolean, onBack: () -> Un
         }
     }
     Column(Modifier.fillMaxSize().background(Color.Black)) {
-        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Volver", tint = Color.White) }
-            Text("KUVITTA PLAYER", Modifier.weight(1f), color = Color.White, fontWeight = FontWeight.Black)
-            IconButton(onClick = { (context as? Activity)?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE }) {
-                Icon(Icons.Default.Fullscreen, "Pantalla completa", tint = Color.White)
+        if (!isLandscape) {
+            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Volver", tint = Color.White) }
+                Text("KUVITTA PLAYER", Modifier.weight(1f), color = Color.White, fontWeight = FontWeight.Black)
+                IconButton(onClick = { (context as? Activity)?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE }) {
+                    Icon(Icons.Default.Fullscreen, "Pantalla completa", tint = Color.White)
+                }
             }
         }
         AndroidView(
@@ -232,17 +293,19 @@ private fun PlayerScreen(video: VideoResult, favorite: Boolean, onBack: () -> Un
                     })
                 }
             },
-            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+            modifier = if (isLandscape) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(16f / 9f)
         )
-        Column(Modifier.padding(18.dp)) {
-            Text(video.title, color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold)
-            Text(video.channel, color = Color.Gray)
-            Spacer(Modifier.height(14.dp))
-            OutlinedButton(onClick = onFavorite) {
-                Icon(if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null)
-                Text(if (favorite) " Quitar de favoritos" else " Guardar en favoritos")
+        if (!isLandscape) {
+            Column(Modifier.padding(18.dp)) {
+                Text(video.title, color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold)
+                Text(video.channel, color = Color.Gray)
+                Spacer(Modifier.height(14.dp))
+                OutlinedButton(onClick = onFavorite) {
+                    Icon(if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null)
+                    Text(if (favorite) " Quitar de favoritos" else " Guardar en favoritos")
+                }
+                Text("Reproducción mediante el reproductor oficial IFrame de YouTube.", color = Color.DarkGray, fontSize = 12.sp, modifier = Modifier.padding(top = 16.dp))
             }
-            Text("Reproducción mediante el reproductor oficial IFrame de YouTube.", color = Color.DarkGray, fontSize = 12.sp, modifier = Modifier.padding(top = 16.dp))
         }
     }
 }
@@ -287,6 +350,23 @@ private suspend fun youtubeSearch(apiKey: String, query: String): List<VideoResu
             if (id.isBlank()) continue
             val snippet = item.getJSONObject("snippet")
             add(VideoResult(id, snippet.getString("title").htmlDecode(), snippet.getString("channelTitle").htmlDecode(), snippet.getJSONObject("thumbnails").getJSONObject("medium").getString("url")))
+        }
+    }
+}
+
+private suspend fun youtubeSuggestions(query: String): List<String> = withContext(Dispatchers.IO) {
+    val endpoint = "https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q=" +
+        URLEncoder.encode(query, "UTF-8")
+    val connection = URL(endpoint).openConnection() as HttpURLConnection
+    connection.connectTimeout = 6_000
+    connection.readTimeout = 6_000
+    connection.setRequestProperty("User-Agent", "KuvittaMovies/1.3")
+    if (connection.responseCode !in 200..299) return@withContext emptyList()
+    val body = connection.inputStream.bufferedReader().use { it.readText() }
+    val array = JSONArray(body).optJSONArray(1) ?: return@withContext emptyList()
+    buildList {
+        for (i in 0 until minOf(array.length(), 8)) {
+            array.optString(i).takeIf { it.isNotBlank() }?.let(::add)
         }
     }
 }
