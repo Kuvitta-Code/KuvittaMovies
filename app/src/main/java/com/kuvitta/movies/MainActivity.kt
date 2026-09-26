@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun KuvittaMoviesApp() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("kuvitta", Context.MODE_PRIVATE) }
