@@ -84,7 +84,7 @@ fun KuvittaMoviesApp() {
     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
     var apiKey by remember { mutableStateOf(prefs.getString("youtube_key", "") ?: "") }
     var showKeyDialog by remember { mutableStateOf(false) }
-    var favorites by remember { mutableStateOf(prefs.getStringSet("favorites", emptySet()) ?: emptySet()) }
+    var favorites by remember { mutableStateOf(loadFavorites(prefs)) }
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFFE50914), background = Color(0xFF07080C), surface = Color(0xFF14161D))) {
         Scaffold(
@@ -108,10 +108,14 @@ fun KuvittaMoviesApp() {
                 when (val current = screen) {
                     Screen.Home -> HomeScreen { screen = Screen.Search(it.title + " película completa") }
                     is Screen.Search -> SearchScreen(current.initial, apiKey, { showKeyDialog = true }) { screen = Screen.Player(it) }
-                    Screen.Favorites -> FavoritesScreen(favorites)
-                    is Screen.Player -> PlayerScreen(current.video, current.video.id in favorites, { screen = Screen.Search() }) {
-                        favorites = if (current.video.id in favorites) favorites - current.video.id else favorites + current.video.id
-                        prefs.edit().putStringSet("favorites", favorites).apply()
+                    Screen.Favorites -> FavoritesScreen(favorites) { screen = Screen.Player(it) }
+                    is Screen.Player -> PlayerScreen(current.video, favorites.any { it.id == current.video.id }, { screen = Screen.Search() }) {
+                        favorites = if (favorites.any { it.id == current.video.id }) {
+                            favorites.filterNot { it.id == current.video.id }
+                        } else {
+                            favorites + current.video
+                        }
+                        saveFavorites(prefs, favorites)
                     }
                 }
             }
@@ -311,11 +315,58 @@ private fun PlayerScreen(video: VideoResult, favorite: Boolean, onBack: () -> Un
 }
 
 @Composable
-private fun FavoritesScreen(ids: Set<String>) {
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
+private fun FavoritesScreen(videos: List<VideoResult>, onPlay: (VideoResult) -> Unit) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Text("Mis favoritos", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Black)
-        Text(if (ids.isEmpty()) "Aún no has guardado vídeos." else ids.size.toString() + " vídeos guardados.", color = Color.Gray, modifier = Modifier.padding(top = 16.dp))
+        if (videos.isEmpty()) {
+            Text("Aún no has guardado vídeos.", color = Color.Gray, modifier = Modifier.padding(top = 16.dp))
+        } else {
+            Text("${videos.size} vídeos guardados", color = Color.Gray, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(videos, key = { it.id }) { video ->
+                    VideoCard(video) { onPlay(video) }
+                }
+            }
+        }
     }
+}
+
+private fun loadFavorites(prefs: android.content.SharedPreferences): List<VideoResult> {
+    val saved = runCatching {
+        val array = JSONArray(prefs.getString("favorite_videos", "[]") ?: "[]")
+        buildList {
+            for (i in 0 until array.length()) {
+                val item = array.getJSONObject(i)
+                add(VideoResult(item.getString("id"), item.getString("title"), item.getString("channel"), item.getString("thumbnail")))
+            }
+        }
+    }.getOrDefault(emptyList())
+    if (saved.isNotEmpty()) return saved
+
+    // Conserva los favoritos creados por las versiones anteriores.
+    return (prefs.getStringSet("favorites", emptySet()) ?: emptySet()).map { id ->
+        VideoResult(id, "Vídeo favorito", "YouTube", "https://i.ytimg.com/vi/$id/mqdefault.jpg")
+    }
+}
+
+private fun saveFavorites(prefs: android.content.SharedPreferences, videos: List<VideoResult>) {
+    val array = JSONArray()
+    videos.forEach { video ->
+        array.put(JSONObject().apply {
+            put("id", video.id)
+            put("title", video.title)
+            put("channel", video.channel)
+            put("thumbnail", video.thumbnail)
+        })
+    }
+    prefs.edit()
+        .putString("favorite_videos", array.toString())
+        .putStringSet("favorites", videos.mapTo(mutableSetOf()) { it.id })
+        .apply()
 }
 
 @Composable
