@@ -12,8 +12,8 @@ android {
         applicationId = "com.kuvitta.movies"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 3
+        versionName = "1.2.0"
     }
 
     buildFeatures { compose = true }
@@ -36,5 +36,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.1")
     implementation("androidx.datastore:datastore-preferences:1.1.7")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:13.0.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
