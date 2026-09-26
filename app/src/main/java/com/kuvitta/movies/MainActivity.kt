@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -27,6 +30,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 
 data class Movie(
@@ -62,6 +67,7 @@ fun KuvittaMoviesApp() {
     var tab by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<Movie?>(null) }
+    var youtubeSearch by remember { mutableStateOf<String?>(null) }
     val prefs = remember { context.getSharedPreferences("favorites", Context.MODE_PRIVATE) }
     var favorites by remember { mutableStateOf(prefs.getStringSet("ids", emptySet()) ?: emptySet()) }
 
@@ -79,7 +85,7 @@ fun KuvittaMoviesApp() {
             Box(Modifier.padding(padding)) {
                 when (tab) {
                     0 -> HomeScreen(onMovie = { selected = it })
-                    1 -> SearchScreen(query, { query = it }, movies.filter { it.title.contains(query, true) || it.genre.contains(query, true) }, { selected = it })
+                    1 -> SearchScreen(query, { query = it }, movies.filter { it.title.contains(query, true) || it.genre.contains(query, true) }, { selected = it }, { youtubeSearch = it })
                     else -> MovieGrid(movies.filter { it.id in favorites }, "Mis favoritos", { selected = it })
                 }
             }
@@ -89,10 +95,11 @@ fun KuvittaMoviesApp() {
             MovieDialog(movie, movie.id in favorites, onDismiss = { selected = null }, onFavorite = {
                 favorites = if (movie.id in favorites) favorites - movie.id else favorites + movie.id
                 prefs.edit().putStringSet("ids", favorites).apply()
-            }, onPlay = {
-                val url = "https://www.youtube.com/results?search_query=" + Uri.encode(movie.youtubeQuery)
-                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-            })
+            }, onPlay = { youtubeSearch = movie.youtubeQuery; selected = null })
+        }
+
+        youtubeSearch?.let { search ->
+            YouTubePlayerDialog(search = search, onDismiss = { youtubeSearch = null })
         }
     }
 }
@@ -139,11 +146,16 @@ private fun MovieCard(movie: Movie, onMovie: (Movie) -> Unit) {
 }
 
 @Composable
-private fun SearchScreen(query: String, onQuery: (String) -> Unit, results: List<Movie>, onMovie: (Movie) -> Unit) {
+private fun SearchScreen(query: String, onQuery: (String) -> Unit, results: List<Movie>, onMovie: (Movie) -> Unit, onYouTubeSearch: (String) -> Unit) {
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("Buscar", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(14.dp))
         OutlinedTextField(query, onQuery, Modifier.fillMaxWidth(), placeholder = { Text("Título o género") }, leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true)
+        Button(
+            onClick = { if (query.isNotBlank()) onYouTubeSearch("$query película completa español oficial") },
+            enabled = query.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().padding(top = 10.dp)
+        ) { Icon(Icons.Default.PlayArrow, null); Text(" Buscar y reproducir en YouTube") }
         Spacer(Modifier.height(16.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(results) { movie ->
@@ -155,6 +167,47 @@ private fun SearchScreen(query: String, onQuery: (String) -> Unit, results: List
                         Text(movie.genre, color = Color(0xFFE50914))
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun YouTubePlayerDialog(search: String, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.92f),
+            shape = RoundedCornerShape(16.dp),
+            color = Color.Black
+        ) {
+            Column {
+                Row(
+                    Modifier.fillMaxWidth().background(Color(0xFF151820)).padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.PlayCircle, null, tint = Color(0xFFE50914))
+                    Text(" YouTube · Reproductor", Modifier.weight(1f), color = Color.White, fontWeight = FontWeight.Bold)
+                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Cerrar", tint = Color.White) }
+                }
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { context ->
+                        WebView(context).apply {
+                            setBackgroundColor(android.graphics.Color.BLACK)
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.mediaPlaybackRequiresUserGesture = true
+                            settings.userAgentString = settings.userAgentString.replace("; wv", "")
+                            webViewClient = WebViewClient()
+                            webChromeClient = WebChromeClient()
+                            loadUrl("https://m.youtube.com/results?search_query=" + Uri.encode(search))
+                        }
+                    },
+                    update = { view ->
+                        val target = "https://m.youtube.com/results?search_query=" + Uri.encode(search)
+                        if (view.url != target && view.url?.contains("youtube.com") != true) view.loadUrl(target)
+                    }
+                )
             }
         }
     }
